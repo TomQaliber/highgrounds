@@ -1,0 +1,62 @@
+.range-control {
+  width: min(280px, calc(100vw - 1.5rem));
+  padding: 0.45rem 0.7rem 0.4rem;
+  border-radius: 0.85rem;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  border: 1px solid var(--stroke);
+  backdrop-filter: blur(10px);
+  box-shadow: var(--shadow-soft);
+  color: var(--ink);
+}
+
+.range-control.is-disabled {
+  opacity: 0.55;
+}
+
+.range-control label {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.range-control label span {
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--canopy-deep);
+  font-size: 0.85rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.range-control input[type='range'] {
+  width: 100%;
+  margin: 0.25rem 0 0.1rem;
+  accent-color: var(--accent);
+  cursor: pointer;
+  touch-action: pan-y;
+}
+
+.range-control input[type='range']:disabled {
+  cursor: not-allowed;
+}
+
+.range-control__ticks {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.62rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 839px) {
+  .range-control {
+    width: min(100%, calc(100vw - 1.5rem));
+    padding: 0.4rem 0.65rem 0.35rem;
+  }
+}

@@ -1,0 +1,70 @@
+.spot-filter-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  width: min(100%, calc(100vw - 1.5rem));
+}
+
+.spot-filter-wrap.is-disabled {
+  opacity: 0.55;
+}
+
+.spot-filter {
+  display: flex;
+  gap: 0.3rem;
+  padding: 0.25rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  border: 1px solid var(--stroke);
+  backdrop-filter: blur(10px);
+  box-shadow: var(--shadow-soft);
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+
+.spot-filter::-webkit-scrollbar {
+  display: none;
+}
+
+.spot-filter--access {
+  padding: 0.2rem;
+}
+
+.spot-filter button {
+  border: none;
+  background: transparent;
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 650;
+  padding: 0.4rem 0.7rem;
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.spot-filter--access button {
+  font-size: 0.72rem;
+  padding: 0.32rem 0.6rem;
+}
+
+.spot-filter button.is-active {
+  background: var(--canopy-deep);
+  color: var(--accent-ink);
+}
+
+.spot-filter button:disabled {
+  cursor: not-allowed;
+}
+
+@media (min-width: 840px) {
+  .spot-filter button {
+    font-size: 0.82rem;
+    padding: 0.45rem 0.85rem;
+  }
+}

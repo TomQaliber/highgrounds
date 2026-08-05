@@ -1,0 +1,129 @@
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+}
+
+.search-bar {
+  display: flex;
+  gap: 0.35rem;
+  align-items: stretch;
+  width: min(560px, calc(100vw - 1.5rem));
+  position: relative;
+}
+
+.search-bar input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--stroke);
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  backdrop-filter: blur(10px);
+  color: var(--ink);
+  border-radius: 999px;
+  padding: 0.65rem 0.9rem;
+  font: inherit;
+  font-size: 16px;
+  outline: none;
+  box-shadow: var(--shadow-soft);
+}
+
+.search-bar input:focus {
+  border-color: var(--accent);
+}
+
+.btn {
+  border: none;
+  border-radius: 999px;
+  padding: 0.65rem 0.75rem;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: transform 160ms ease, background 160ms ease, opacity 160ms ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.btn:not(:disabled):active {
+  transform: scale(0.97);
+}
+
+.btn.primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.btn.ghost {
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  color: var(--ink);
+  border: 1px solid var(--stroke);
+  backdrop-filter: blur(10px);
+}
+
+.range-menu {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.range-menu__btn {
+  min-width: 4.4rem;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.85rem;
+}
+
+.range-menu__list {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  z-index: 5;
+  margin: 0;
+  padding: 0.3rem;
+  list-style: none;
+  min-width: 7rem;
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, var(--panel) 96%, transparent);
+  border: 1px solid var(--stroke);
+  box-shadow: var(--shadow-lift);
+  backdrop-filter: blur(12px);
+}
+
+.range-menu__list button {
+  width: 100%;
+  border: none;
+  background: transparent;
+  text-align: left;
+  padding: 0.5rem 0.65rem;
+  border-radius: 0.5rem;
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 650;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.range-menu__list button.is-active,
+.range-menu__list button:hover {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--canopy-deep);
+}
+
+@media (max-width: 520px) {
+  .btn {
+    padding: 0.65rem 0.55rem;
+    font-size: 0.8rem;
+  }
+
+  .range-menu__btn {
+    min-width: 3.8rem;
+    padding-inline: 0.5rem;
+  }
+}

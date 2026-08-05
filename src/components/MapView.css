@@ -1,0 +1,215 @@
+.map-view {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.map-view .maplibregl-marker {
+  z-index: 2 !important;
+}
+
+/*
+  Root element is positioned by MapLibre via transform.
+  Never set transform/position/top/left on .hg-marker itself.
+  Fixed box; pin tip sits on the bottom center (= geographic point).
+*/
+.hg-marker {
+  width: 40px;
+  height: 40px;
+  border: none;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  overflow: visible;
+}
+
+.hg-marker__pin {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 28px;
+  height: 28px;
+  margin-left: -14px;
+  border-radius: 50% 50% 50% 0;
+  transform: rotate(-45deg);
+  background: var(--marker-color, #1f7a4d);
+  border: 2px solid #fff8eb;
+  box-shadow:
+    0 2px 8px rgba(20, 30, 24, 0.4),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+}
+
+.hg-marker__pin::after {
+  content: '';
+  position: absolute;
+  inset: 6px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.92);
+  transform: rotate(45deg);
+}
+
+.hg-marker__rank {
+  position: absolute;
+  inset: 5px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.95);
+  transform: rotate(45deg);
+  font-size: 0.62rem;
+  font-weight: 800;
+  color: #1a2e24;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+
+.hg-marker:has(.hg-marker__rank) .hg-marker__pin::after {
+  display: none;
+}
+
+.hg-marker.is-selected .hg-marker__rank {
+  font-size: 0.7rem;
+}
+
+.hg-marker__label {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 2px);
+  transform: translateX(-50%);
+  padding: 0.12rem 0.35rem;
+  border-radius: 0.35rem;
+  background: rgba(30, 58, 44, 0.92);
+  color: #f4f7f2;
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
+  letter-spacing: 0.01em;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+
+.hg-marker.is-selected .hg-marker__pin {
+  width: 32px;
+  height: 32px;
+  margin-left: -16px;
+  box-shadow:
+    0 0 0 4px rgba(232, 163, 23, 0.55),
+    0 2px 8px rgba(20, 30, 24, 0.4);
+}
+
+.hg-marker.is-selected .hg-marker__label {
+  background: #e8a317;
+  color: #1e3a2c;
+}
+
+.hg-marker.los-blocked .hg-marker__pin,
+.hg-marker.los-night .hg-marker__pin {
+  opacity: 0.75;
+}
+
+.hg-marker--origin .hg-marker__pin {
+  width: 30px;
+  height: 30px;
+  margin-left: -15px;
+  border-radius: 50%;
+  transform: none;
+  background: #1e3a2c;
+  border: 3px solid #fff8eb;
+}
+
+.hg-marker--origin .hg-marker__pin::after {
+  inset: 7px;
+  transform: none;
+  background: #e8a317;
+}
+
+.hg-marker--origin .hg-marker__label {
+  background: #1e3a2c;
+}
+
+.maplibregl-popup {
+  z-index: 4;
+}
+
+.maplibregl-popup-content {
+  padding: 0.75rem 0.85rem;
+  border-radius: 0.75rem;
+  font-family: var(--font-body, 'Source Sans 3', sans-serif);
+  color: #1c241f;
+  box-shadow: 0 12px 28px rgba(24, 36, 28, 0.2);
+}
+
+.hg-popup__kicker {
+  margin: 0 0 0.2rem;
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #667269;
+}
+
+.hg-popup strong {
+  display: block;
+  font-size: 0.95rem;
+  line-height: 1.25;
+}
+
+.hg-popup__addr {
+  margin: 0.35rem 0 0.5rem;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  color: #3a463f;
+}
+
+.hg-popup ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.hg-popup li {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: 0.78rem;
+  line-height: 1.3;
+}
+
+.hg-popup li span {
+  color: #667269;
+  flex-shrink: 0;
+}
+
+.hg-popup__links {
+  margin: 0.55rem 0 0;
+  font-size: 0.75rem;
+}
+
+.hg-popup__links a {
+  color: #2f6b4f;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.maplibregl-ctrl-attrib {
+  font-size: 10px;
+}
+
+@media (max-width: 480px) {
+  .map-view .maplibregl-ctrl-top-right {
+    top: auto;
+    bottom: 8.5rem;
+    right: 0.35rem;
+  }
+
+  .map-view .maplibregl-ctrl-bottom-right {
+    bottom: 0.25rem;
+  }
+}
