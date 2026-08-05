@@ -20,6 +20,13 @@ const METERS_PER_LEVEL = 3
 const DEFAULT_TREE_H = 12
 const DEFAULT_FOREST_H = 18
 
+/** Call Overpass from the browser (CORS *). Avoids Vercel Hobby’s ~10s serverless limit. */
+const OVERPASS_ENDPOINTS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://lz4.overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+]
+
 function parseHeight(tags: Record<string, string> | undefined, fallback: number): {
   height: number
   estimated: boolean
@@ -43,14 +50,11 @@ function wayRing(el: OverpassElement): [number, number][] | null {
   return el.geometry.map((g) => [g.lon, g.lat] as [number, number])
 }
 
-/** Lighter queries: skip individual tree nodes (too heavy in cities); use woods/forests. */
-function buildQuery(bb: string): string {
+/** Paths / parks — needed for walkable spots. */
+function buildAccessQuery(bb: string): string {
   return `
-[out:json][timeout:45];
+[out:json][timeout:25];
 (
-  way["building"](${bb});
-  way["natural"="wood"](${bb});
-  way["landuse"="forest"](${bb});
   way["highway"~"^(footway|path|steps|pedestrian|living_street|track|unclassified|residential|tertiary|secondary|service)$"](${bb});
   way["leisure"~"^(park|nature_reserve)$"](${bb});
   way["landuse"~"^(grass|recreation_ground|village_green)$"](${bb});
@@ -59,18 +63,42 @@ out body geom;
 `.trim()
 }
 
-async function postOverpass(query: string): Promise<OverpassResponse> {
-  const res = await fetch('/api/overpass', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: `data=${encodeURIComponent(query)}`,
-  })
+/** Buildings / woods — used for sun line-of-sight. */
+function buildObstacleQuery(bb: string): string {
+  return `
+[out:json][timeout:25];
+(
+  way["building"](${bb});
+  way["natural"="wood"](${bb});
+  way["landuse"="forest"](${bb});
+);
+out body geom;
+`.trim()
+}
 
-  if (!res.ok) {
-    throw new Error(`OpenStreetMap request failed (${res.status})`)
+async function postOverpass(query: string): Promise<OverpassResponse> {
+  let lastError: Error | null = null
+
+  for (const endpoint of OVERPASS_ENDPOINTS) {
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `data=${encodeURIComponent(query)}`,
+        signal: AbortSignal.timeout(35_000),
+      })
+      if (!res.ok) {
+        lastError = new Error(`OpenStreetMap request failed (${res.status})`)
+        if ([429, 502, 503, 504].includes(res.status)) continue
+        throw lastError
+      }
+      return (await res.json()) as OverpassResponse
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err))
+    }
   }
 
-  return (await res.json()) as OverpassResponse
+  throw lastError ?? new Error('OpenStreetMap request failed')
 }
 
 function parseElements(elements: OverpassElement[]): {
@@ -127,7 +155,12 @@ function parseElements(elements: OverpassElement[]): {
     const landuse = tags.landuse
     const accessTag = tags.access
 
-    if (highway && /^(footway|path|steps|pedestrian|living_street|track|unclassified|residential|tertiary|secondary|service)$/.test(highway)) {
+    if (
+      highway &&
+      /^(footway|path|steps|pedestrian|living_street|track|unclassified|residential|tertiary|secondary|service)$/.test(
+        highway,
+      )
+    ) {
       accessFeatures.push({
         id: `path-${el.id}`,
         kind: 'path',
@@ -166,16 +199,37 @@ export async function fetchOsmContext(bbox: {
 }): Promise<{ obstacles: Obstacle[]; accessFeatures: AccessFeature[] }> {
   const { south, west, north, east } = bbox
   const bb = `${south},${west},${north},${east}`
-  const query = buildQuery(bb)
 
   let lastError: Error | null = null
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      if (attempt > 0) await sleep(1500 * attempt)
-      const data = await postOverpass(query)
-      return parseElements(data.elements ?? [])
-    } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err))
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt > 0) await sleep(1200 * attempt)
+
+    // Parallel lighter queries — succeed partially if one mirror/query is slow
+    const [accessResult, obstacleResult] = await Promise.allSettled([
+      postOverpass(buildAccessQuery(bb)),
+      postOverpass(buildObstacleQuery(bb)),
+    ])
+
+    const accessData =
+      accessResult.status === 'fulfilled' ? (accessResult.value.elements ?? []) : []
+    const obstacleData =
+      obstacleResult.status === 'fulfilled' ? (obstacleResult.value.elements ?? []) : []
+
+    if (accessResult.status === 'rejected' && obstacleResult.status === 'rejected') {
+      lastError =
+        accessResult.reason instanceof Error
+          ? accessResult.reason
+          : new Error(String(accessResult.reason))
+      continue
+    }
+
+    const parsedAccess = parseElements(accessData)
+    const parsedObstacles = parseElements(obstacleData)
+
+    return {
+      obstacles: parsedObstacles.obstacles,
+      accessFeatures: parsedAccess.accessFeatures,
     }
   }
 

@@ -144,7 +144,7 @@ export default function App() {
       } catch {
         setObstacles([])
         setWarning(
-          'Map features from OpenStreetMap timed out — showing elevation peaks only. Access and sun-blocking may be incomplete; try again in a moment.',
+          'OpenStreetMap is slow or busy — showing elevation peaks only. Access and sun-blocking may be incomplete; try again in a moment.',
         )
       }
 
