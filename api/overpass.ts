@@ -1,9 +1,10 @@
-import { USER_AGENT } from './_shared'
-
 export const config = {
   runtime: 'nodejs',
   maxDuration: 60,
 }
+
+const USER_AGENT =
+  'HighGrounds/1.0 (https://github.com/TomQaliber/highgrounds; europe-viewpoint-finder)'
 
 const OVERPASS_ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
