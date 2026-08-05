@@ -7,6 +7,7 @@ interface OverpassElement {
   tags?: Record<string, string>
   lat?: number
   lon?: number
+  center?: { lat: number; lon: number }
   geometry?: Array<{ lat: number; lon: number }>
 }
 
@@ -20,11 +21,12 @@ const METERS_PER_LEVEL = 3
 const DEFAULT_TREE_H = 12
 const DEFAULT_FOREST_H = 18
 
-/** Call Overpass from the browser (CORS *). Avoids Vercel Hobby’s ~10s serverless limit. */
+/** Prefer direct Overpass (CORS *) — avoids Vercel Hobby’s ~10s serverless limit. */
 const OVERPASS_ENDPOINTS = [
-  'https://overpass-api.de/api/interpreter',
   'https://lz4.overpass-api.de/api/interpreter',
+  'https://overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter',
 ]
 
 function parseHeight(tags: Record<string, string> | undefined, fallback: number): {
@@ -50,10 +52,26 @@ function wayRing(el: OverpassElement): [number, number][] | null {
   return el.geometry.map((g) => [g.lon, g.lat] as [number, number])
 }
 
+function elementCenter(el: OverpassElement): { lat: number; lng: number } | null {
+  if (el.center) return { lat: el.center.lat, lng: el.center.lon }
+  if (el.lat != null && el.lon != null) return { lat: el.lat, lng: el.lon }
+  if (el.geometry && el.geometry.length > 0) {
+    let lat = 0
+    let lng = 0
+    for (const g of el.geometry) {
+      lat += g.lat
+      lng += g.lon
+    }
+    const n = el.geometry.length
+    return { lat: lat / n, lng: lng / n }
+  }
+  return null
+}
+
 /** Paths / parks — needed for walkable spots. */
 function buildAccessQuery(bb: string): string {
   return `
-[out:json][timeout:25];
+[out:json][timeout:20];
 (
   way["highway"~"^(footway|path|steps|pedestrian|living_street|track|unclassified|residential|tertiary|secondary|service)$"](${bb});
   way["leisure"~"^(park|nature_reserve)$"](${bb});
@@ -63,10 +81,10 @@ out body geom;
 `.trim()
 }
 
-/** Buildings / woods — used for sun line-of-sight. */
-function buildObstacleQuery(bb: string): string {
+/** Full footprints for sun line-of-sight (heavier). */
+function buildObstacleGeomQuery(bb: string): string {
   return `
-[out:json][timeout:25];
+[out:json][timeout:20];
 (
   way["building"](${bb});
   way["natural"="wood"](${bb});
@@ -76,21 +94,40 @@ out body geom;
 `.trim()
 }
 
+/** Lightweight fallback: building/forest centers as approximate blockers. */
+function buildObstacleCenterQuery(bb: string): string {
+  return `
+[out:json][timeout:15];
+(
+  way["building"](${bb});
+  way["natural"="wood"](${bb});
+  way["landuse"="forest"](${bb});
+);
+out center tags;
+`.trim()
+}
+
 async function postOverpass(query: string): Promise<OverpassResponse> {
   let lastError: Error | null = null
+  // Rotate start endpoint so repeated searches don't always hit the same busy mirror
+  const start = Math.floor(Math.random() * OVERPASS_ENDPOINTS.length)
+  const endpoints = [
+    ...OVERPASS_ENDPOINTS.slice(start),
+    ...OVERPASS_ENDPOINTS.slice(0, start),
+  ]
 
-  for (const endpoint of OVERPASS_ENDPOINTS) {
+  for (const endpoint of endpoints) {
     try {
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: `data=${encodeURIComponent(query)}`,
-        signal: AbortSignal.timeout(35_000),
+        // Fail over quickly when a mirror is queued/slow
+        signal: AbortSignal.timeout(14_000),
       })
       if (!res.ok) {
         lastError = new Error(`OpenStreetMap request failed (${res.status})`)
-        if ([429, 502, 503, 504].includes(res.status)) continue
-        throw lastError
+        continue
       }
       return (await res.json()) as OverpassResponse
     } catch (err) {
@@ -126,29 +163,55 @@ function parseElements(elements: OverpassElement[]): {
     }
 
     const ring = wayRing(el)
-    if (!ring) continue
+    const center = elementCenter(el)
 
     if (tags.building) {
       const { height, estimated } = parseHeight(tags, DEFAULT_BUILDING_H)
-      obstacles.push({
-        id: `bldg-${el.id}`,
-        kind: 'building',
-        ring,
-        heightM: height,
-        heightEstimated: estimated,
-      })
+      if (ring && ring.length >= 3) {
+        obstacles.push({
+          id: `bldg-${el.id}`,
+          kind: 'building',
+          ring,
+          heightM: height,
+          heightEstimated: estimated,
+        })
+      } else if (center) {
+        obstacles.push({
+          id: `bldg-${el.id}`,
+          kind: 'building',
+          ring: [],
+          heightM: height,
+          heightEstimated: estimated,
+          center,
+          radiusM: 14,
+        })
+      }
     }
 
     if (tags.natural === 'wood' || tags.landuse === 'forest') {
       const { height, estimated } = parseHeight(tags, DEFAULT_FOREST_H)
-      obstacles.push({
-        id: `forest-${el.id}`,
-        kind: 'forest',
-        ring,
-        heightM: height,
-        heightEstimated: estimated || !tags.height,
-      })
+      if (ring && ring.length >= 3) {
+        obstacles.push({
+          id: `forest-${el.id}`,
+          kind: 'forest',
+          ring,
+          heightM: height,
+          heightEstimated: estimated || !tags.height,
+        })
+      } else if (center) {
+        obstacles.push({
+          id: `forest-${el.id}`,
+          kind: 'forest',
+          ring: [],
+          heightM: height,
+          heightEstimated: estimated || !tags.height,
+          center,
+          radiusM: 40,
+        })
+      }
     }
+
+    if (!ring) continue
 
     const highway = tags.highway
     const leisure = tags.leisure
@@ -191,6 +254,16 @@ function parseElements(elements: OverpassElement[]): {
   return { obstacles, accessFeatures }
 }
 
+async function fetchObstacles(bb: string): Promise<Obstacle[]> {
+  try {
+    const data = await postOverpass(buildObstacleGeomQuery(bb))
+    return parseElements(data.elements ?? []).obstacles
+  } catch {
+    const data = await postOverpass(buildObstacleCenterQuery(bb))
+    return parseElements(data.elements ?? []).obstacles
+  }
+}
+
 export async function fetchOsmContext(bbox: {
   south: number
   west: number
@@ -203,33 +276,31 @@ export async function fetchOsmContext(bbox: {
   let lastError: Error | null = null
 
   for (let attempt = 0; attempt < 2; attempt++) {
-    if (attempt > 0) await sleep(1200 * attempt)
+    if (attempt > 0) await sleep(900 * attempt)
 
-    // Parallel lighter queries — succeed partially if one mirror/query is slow
-    const [accessResult, obstacleResult] = await Promise.allSettled([
-      postOverpass(buildAccessQuery(bb)),
-      postOverpass(buildObstacleQuery(bb)),
-    ])
+    // Sequential: paths first (usually lighter), then buildings
+    let accessFeatures: AccessFeature[] = []
+    let obstacles: Obstacle[] = []
+    let accessOk = false
+    let obstaclesOk = false
 
-    const accessData =
-      accessResult.status === 'fulfilled' ? (accessResult.value.elements ?? []) : []
-    const obstacleData =
-      obstacleResult.status === 'fulfilled' ? (obstacleResult.value.elements ?? []) : []
-
-    if (accessResult.status === 'rejected' && obstacleResult.status === 'rejected') {
-      lastError =
-        accessResult.reason instanceof Error
-          ? accessResult.reason
-          : new Error(String(accessResult.reason))
-      continue
+    try {
+      const accessData = await postOverpass(buildAccessQuery(bb))
+      accessFeatures = parseElements(accessData.elements ?? []).accessFeatures
+      accessOk = true
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err))
     }
 
-    const parsedAccess = parseElements(accessData)
-    const parsedObstacles = parseElements(obstacleData)
+    try {
+      obstacles = await fetchObstacles(bb)
+      obstaclesOk = true
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err))
+    }
 
-    return {
-      obstacles: parsedObstacles.obstacles,
-      accessFeatures: parsedAccess.accessFeatures,
+    if (accessOk || obstaclesOk) {
+      return { obstacles, accessFeatures }
     }
   }
 

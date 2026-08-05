@@ -352,13 +352,23 @@ export default function App() {
 
       {warning && status.kind === 'ready' && (
         <div className="app__warning" role="status">
-          {warning}
+          <p className="app__warning-text">{warning}</p>
+          <button
+            type="button"
+            className="app__warning-close"
+            onClick={() => setWarning(null)}
+            aria-label="Dismiss message"
+          >
+            ×
+          </button>
         </div>
       )}
 
       {status.kind === 'ready' && filter !== 'all' && visibleViewpoints.length === 0 && (
         <div className="app__warning" role="status">
-          No clear {filter} spots found here — try “All highs” or another area.
+          <p className="app__warning-text">
+            No clear {filter} spots found here — try “All highs” or another area.
+          </p>
         </div>
       )}
 
