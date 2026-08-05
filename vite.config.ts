@@ -17,6 +17,10 @@ function apiProxyPlugin(): Plugin {
 
 export default defineConfig({
   plugins: [react(), apiProxyPlugin()],
+  build: {
+    target: 'es2022',
+    chunkSizeWarningLimit: 1600,
+  },
   optimizeDeps: {
     exclude: ['maplibre-gl'],
   },

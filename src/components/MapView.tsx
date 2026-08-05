@@ -1,7 +1,8 @@
 import { useEffect, useRef } from 'react'
 import * as maplibregl from 'maplibre-gl'
 import type { Map, Marker } from 'maplibre-gl'
-import { Popup } from 'maplibre-gl'
+import { Popup, setWorkerUrl } from 'maplibre-gl'
+import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import type { ElevationPoint, SearchOrigin, SpotFilter, Viewpoint } from '../lib/types'
 import { destinationPoint } from '../lib/geo'
@@ -12,6 +13,9 @@ import {
   mapsUrl,
 } from '../lib/format'
 import './MapView.css'
+
+// Vite 8 / Rolldown production builds need an explicit same-origin worker URL
+setWorkerUrl(maplibreWorkerUrl)
 
 const STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty'
 
