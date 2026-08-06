@@ -1,7 +1,8 @@
 export const config = {
-  runtime: 'edge',
-  // Hobby plan caps around 10s — keep upstream attempts inside that budget
-  maxDuration: 10,
+  // Node runtime: Edge was returning 504 with "No outgoing requests"
+  // (outbound Overpass fetch never completed from the Edge isolate).
+  runtime: 'nodejs',
+  maxDuration: 60,
 }
 
 const USER_AGENT =
@@ -20,27 +21,33 @@ export default async function handler(request: Request): Promise<Response> {
   }
 
   const body = await request.text()
+  if (!body) {
+    return Response.json({ error: 'Missing Overpass query body' }, { status: 400 })
+  }
+
   let lastStatus = 502
   let lastText = '{"error":"All Overpass endpoints failed"}'
 
-  // Rotate start so repeated calls don't always hit the same busy mirror
   const start = Math.floor(Math.random() * OVERPASS_ENDPOINTS.length)
   const endpoints = [
     ...OVERPASS_ENDPOINTS.slice(start),
     ...OVERPASS_ENDPOINTS.slice(0, start),
   ]
 
-  // At most two mirrors so we stay within Hobby's ~10s function limit
-  for (const endpoint of endpoints.slice(0, 2)) {
+  // Try a few mirrors quickly; Hobby may still clamp wall time ~10s
+  for (const endpoint of endpoints.slice(0, 3)) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 8_000)
     try {
       const upstream = await fetch(endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
+          Accept: 'application/json',
           'User-Agent': USER_AGENT,
         },
         body,
-        signal: AbortSignal.timeout(7_500),
+        signal: controller.signal,
       })
       const text = await upstream.text()
       if (upstream.ok) {
@@ -54,16 +61,21 @@ export default async function handler(request: Request): Promise<Response> {
         })
       }
       lastStatus = upstream.status
-      lastText = text
+      lastText = text || JSON.stringify({ error: `Overpass ${upstream.status}` })
       if (![429, 502, 503, 504].includes(upstream.status)) {
-        return new Response(text, {
+        return new Response(lastText, {
           status: upstream.status,
           headers: { 'Content-Type': 'application/json' },
         })
       }
-    } catch {
+    } catch (err) {
       lastStatus = 504
-      lastText = JSON.stringify({ error: `Overpass unreachable: ${endpoint}` })
+      lastText = JSON.stringify({
+        error: `Overpass unreachable: ${endpoint}`,
+        detail: err instanceof Error ? err.message : String(err),
+      })
+    } finally {
+      clearTimeout(timer)
     }
   }
 

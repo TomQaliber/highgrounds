@@ -22,15 +22,15 @@ const DEFAULT_TREE_H = 12
 const DEFAULT_FOREST_H = 18
 
 /**
- * Prefer same-origin /api/overpass (works with adblockers; matches local Vite proxy).
- * Fall back to direct Overpass mirrors if the proxy is down or times out.
+ * Prefer direct Overpass (CORS *) so mobile / unblocked browsers skip Vercel.
+ * Fall back to same-origin /api/overpass when mirrors are blocked (e.g. adblock).
  */
 const OVERPASS_ENDPOINTS = [
-  '/api/overpass',
   'https://lz4.overpass-api.de/api/interpreter',
   'https://overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
   'https://overpass.private.coffee/api/interpreter',
+  '/api/overpass',
 ]
 
 function parseHeight(tags: Record<string, string> | undefined, fallback: number): {

@@ -21,9 +21,9 @@ Europe-focused web app that finds elevated, accessible viewpoints near a locatio
 
 Locally, Vite middleware serves `/api/*`. On Vercel, the same paths are Edge/serverless functions in `api/`.
 
-**Overpass / OSM context** goes through same-origin `/api/overpass` first (then direct mirrors as fallback). That keeps local and production behavior aligned and avoids adblockers that often block `overpass-*.de` on non-localhost sites.
+**Overpass / OSM context** tries public Overpass mirrors directly from the browser first (CORS allowed), then falls back to same-origin `/api/overpass`. The proxy uses the **Node.js** runtime (Edge was hanging with 504 and no outbound requests on Vercel).
 
-Vercel Hobby functions are short-lived (~10s), so OSM queries are kept light (paths + building *centers*). Full building footprints may still time out on busy mirrors — the UI warning is dismissible when that happens.
+Vercel Hobby may still clamp proxy duration (~10s); light queries (paths + building *centers*) are used so either path can succeed. The UI warning is dismissible when OSM is unavailable.
 
 ## Develop
 
