@@ -1,5 +1,5 @@
-import { useCallback, useMemo, useState } from 'react'
-import { MapView } from './components/MapView'
+import { useCallback, useMemo, useRef, useState } from 'react'
+import { MapView, type MapViewHandle } from './components/MapView'
 import { SearchBar } from './components/SearchBar'
 import { SpotCard } from './components/SpotCard'
 import { SpotFilterBar } from './components/SpotFilter'
@@ -12,11 +12,10 @@ import {
   findTerrainCandidates,
   mergeCandidates,
 } from './lib/candidates'
-import { DEFAULT_RADIUS_M, elevationBbox, fetchPointElevation, sampleElevationGrid } from './lib/elevation'
+import { DEFAULT_RADIUS_M, fetchPointElevation, sampleElevationGrid } from './lib/elevation'
 import { EUROPE_MESSAGE, isInEurope } from './lib/europe'
 import { reverseGeocode, reverseGeocodeMany, searchAddress } from './lib/geocode'
 import { isGoodSunSpot, losRank, scoreViewpoints, scoreViewpointsAtTime } from './lib/los'
-import { fetchOsmContext } from './lib/osm'
 import { sunStateAt } from './lib/sun'
 import type {
   AccessFilter,
@@ -37,6 +36,7 @@ type Status =
   | { kind: 'ready' }
 
 export default function App() {
+  const mapRef = useRef<MapViewHandle>(null)
   const [origin, setOrigin] = useState<SearchOrigin | null>(null)
   const [viewpoints, setViewpoints] = useState<Viewpoint[]>([])
   const [obstacles, setObstacles] = useState<Obstacle[]>([])
@@ -171,23 +171,29 @@ export default function App() {
       setStatus({ kind: 'loading', message: 'Finding peaks & sun-facing slopes…' })
       let peaks = findTerrainCandidates(samples)
 
-      setStatus({ kind: 'loading', message: 'Checking paths, access & obstacles…' })
-      const bbox = elevationBbox(place, radiusM + 400)
+      setStatus({ kind: 'loading', message: 'Reading walkable paths from the map…' })
       let obs: Obstacle[] = []
       try {
-        const ctx = await fetchOsmContext(bbox)
-        obs = ctx.obstacles
-        setObstacles(obs)
-        const pathCandidates = candidatesFromPaths(ctx.accessFeatures, samples)
-        peaks = mergeCandidates(peaks, pathCandidates)
-        peaks = classifyAndSnapViewpoints(peaks, ctx.accessFeatures)
+        const tilePaths =
+          (await mapRef.current?.extractWalkablePaths(place, radiusM)) ?? []
+        if (tilePaths.length > 0) {
+          const pathCandidates = candidatesFromPaths(tilePaths, samples)
+          peaks = mergeCandidates(peaks, pathCandidates)
+          peaks = classifyAndSnapViewpoints(peaks, tilePaths)
+        }
         peaks = attachAspects(peaks, samples)
+        if (tilePaths.length === 0) {
+          setWarning(
+            'No walkable paths found in the map tiles here — showing elevation peaks. Zoom or try another spot.',
+          )
+        }
       } catch {
-        setObstacles([])
+        peaks = attachAspects(peaks, samples)
         setWarning(
-          'OpenStreetMap is slow or busy — showing elevation peaks only. Access and sun-blocking may be incomplete; try again in a moment.',
+          'Could not read paths from the map — showing elevation peaks only.',
         )
       }
+      setObstacles(obs)
 
       const now = new Date()
       const sunNow = sunStateAt(now, place)
@@ -314,6 +320,7 @@ export default function App() {
   return (
     <div className={`app ${status.kind === 'ready' ? 'is-ready' : ''}`}>
       <MapView
+        ref={mapRef}
         origin={origin}
         viewpoints={visibleViewpoints}
         elevationSamples={elevationSamples}

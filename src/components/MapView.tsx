@@ -1,10 +1,10 @@
-import { useEffect, useRef } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
 import * as maplibregl from 'maplibre-gl'
 import type { Map, Marker } from 'maplibre-gl'
 import { Popup, setWorkerUrl } from 'maplibre-gl'
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
 import 'maplibre-gl/dist/maplibre-gl.css'
-import type { ElevationPoint, SearchOrigin, SpotFilter, Viewpoint } from '../lib/types'
+import type { AccessFeature, ElevationPoint, LatLng, SearchOrigin, SpotFilter, Viewpoint } from '../lib/types'
 import { destinationPoint } from '../lib/geo'
 import {
   escapeHtml,
@@ -12,12 +12,22 @@ import {
   googleMapsUrl,
   mapsUrl,
 } from '../lib/format'
+import {
+  extractWalkablePathsFromMap,
+  fitMapToSearchArea,
+  waitForMapIdle,
+} from '../lib/tilePaths'
 import './MapView.css'
 
 // Vite 8 / Rolldown production builds need an explicit same-origin worker URL
 setWorkerUrl(maplibreWorkerUrl)
 
 const STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty'
+
+export type MapViewHandle = {
+  /** Fit to search area, wait for tiles, return walkable path features from the basemap. */
+  extractWalkablePaths: (center: LatLng, radiusM: number) => Promise<AccessFeature[]>
+}
 
 interface MapViewProps {
   origin: SearchOrigin | null
@@ -118,24 +128,50 @@ function elevationGeoJSON(samples: ElevationPoint[]): {
   }
 }
 
-export function MapView({
-  origin,
-  viewpoints,
-  elevationSamples,
-  showHeightOverlay,
-  searchRadiusM,
-  selectedId,
-  filter,
-  sunAzimuthDeg,
-  sunAltitudeDeg,
-  onSelect,
-}: MapViewProps) {
+export const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
+  {
+    origin,
+    viewpoints,
+    elevationSamples,
+    showHeightOverlay,
+    searchRadiusM,
+    selectedId,
+    filter,
+    sunAzimuthDeg,
+    sunAltitudeDeg,
+    onSelect,
+  },
+  ref,
+) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<Map | null>(null)
   const markersRef = useRef<Marker[]>([])
   const originMarkerRef = useRef<Marker | null>(null)
   const onSelectRef = useRef(onSelect)
   onSelectRef.current = onSelect
+
+  useImperativeHandle(ref, () => ({
+    async extractWalkablePaths(center, radiusM) {
+      const map = mapRef.current
+      if (!map) return []
+
+      const run = async () => {
+        fitMapToSearchArea(map, center, radiusM)
+        await waitForMapIdle(map, 12_000)
+        // Second pass after tiles settle (paths need z14+)
+        if (map.getZoom() < 14) {
+          map.jumpTo({ center: [center.lng, center.lat], zoom: 14 })
+          await waitForMapIdle(map, 8_000)
+        }
+        return extractWalkablePathsFromMap(map, center, radiusM)
+      }
+
+      if (!map.isStyleLoaded()) {
+        await new Promise<void>((resolve) => map.once('load', () => resolve()))
+      }
+      return run()
+    },
+  }))
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return
@@ -451,7 +487,8 @@ export function MapView({
   }, [viewpoints, selectedId, origin, sunAzimuthDeg, sunAltitudeDeg])
 
   return <div ref={containerRef} className="map-view" role="presentation" />
-}
+})
+
 
 function emptyCollection(): {
   type: 'FeatureCollection'

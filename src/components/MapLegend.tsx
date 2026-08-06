@@ -78,7 +78,7 @@ export function MapLegend({
           </ul>
           <p className="map-legend__section">Spot types</p>
           <ul>
-            <li>High point · hillside · walkable road</li>
+            <li>High point · hillside · walkable path (from map tiles)</li>
           </ul>
           <p className="map-legend__section">Filters</p>
           <ul>
