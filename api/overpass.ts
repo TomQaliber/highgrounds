@@ -1,6 +1,6 @@
+import type { IncomingMessage, ServerResponse } from 'node:http'
+
 export const config = {
-  // Node runtime: Edge was returning 504 with "No outgoing requests"
-  // (outbound Overpass fetch never completed from the Edge isolate).
   runtime: 'nodejs',
   maxDuration: 60,
 }
@@ -15,14 +15,52 @@ const OVERPASS_ENDPOINTS = [
   'https://overpass.private.coffee/api/interpreter',
 ]
 
-export default async function handler(request: Request): Promise<Response> {
-  if (request.method !== 'POST') {
-    return Response.json({ error: 'Method not allowed' }, { status: 405 })
+type VercelRequest = IncomingMessage & {
+  method?: string
+  body?: unknown
+}
+
+type VercelResponse = ServerResponse & {
+  status: (code: number) => VercelResponse
+  json: (body: unknown) => void
+  send: (body: string) => void
+}
+
+/** Rebuild x-www-form-urlencoded body from Vercel’s parsed or raw request body. */
+function getFormBody(req: VercelRequest): string {
+  const body = req.body
+  if (typeof body === 'string') return body
+  if (body && typeof body === 'object' && 'data' in body) {
+    const data = (body as { data: unknown }).data
+    return `data=${encodeURIComponent(String(data ?? ''))}`
+  }
+  if (body && typeof body === 'object') {
+    const params = new URLSearchParams()
+    for (const [key, value] of Object.entries(body as Record<string, unknown>)) {
+      params.set(key, String(value ?? ''))
+    }
+    return params.toString()
+  }
+  return ''
+}
+
+function sendJson(res: VercelResponse, status: number, payload: unknown) {
+  res.statusCode = status
+  res.setHeader('Content-Type', 'application/json')
+  res.setHeader('Cache-Control', 'no-store')
+  res.end(typeof payload === 'string' ? payload : JSON.stringify(payload))
+}
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  if (req.method !== 'POST') {
+    sendJson(res, 405, { error: 'Method not allowed' })
+    return
   }
 
-  const body = await request.text()
+  const body = getFormBody(req)
   if (!body) {
-    return Response.json({ error: 'Missing Overpass query body' }, { status: 400 })
+    sendJson(res, 400, { error: 'Missing Overpass query body' })
+    return
   }
 
   let lastStatus = 502
@@ -34,7 +72,6 @@ export default async function handler(request: Request): Promise<Response> {
     ...OVERPASS_ENDPOINTS.slice(0, start),
   ]
 
-  // Try a few mirrors quickly; Hobby may still clamp wall time ~10s
   for (const endpoint of endpoints.slice(0, 3)) {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), 8_000)
@@ -51,22 +88,21 @@ export default async function handler(request: Request): Promise<Response> {
       })
       const text = await upstream.text()
       if (upstream.ok) {
-        return new Response(text, {
-          status: 200,
-          headers: {
-            'Content-Type': upstream.headers.get('content-type') ?? 'application/json',
-            'Cache-Control': 'no-store',
-            'X-Overpass-Endpoint': endpoint,
-          },
-        })
+        res.statusCode = 200
+        res.setHeader(
+          'Content-Type',
+          upstream.headers.get('content-type') ?? 'application/json',
+        )
+        res.setHeader('Cache-Control', 'no-store')
+        res.setHeader('X-Overpass-Endpoint', endpoint)
+        res.end(text)
+        return
       }
       lastStatus = upstream.status
       lastText = text || JSON.stringify({ error: `Overpass ${upstream.status}` })
       if (![429, 502, 503, 504].includes(upstream.status)) {
-        return new Response(lastText, {
-          status: upstream.status,
-          headers: { 'Content-Type': 'application/json' },
-        })
+        sendJson(res, upstream.status, lastText)
+        return
       }
     } catch (err) {
       lastStatus = 504
@@ -79,8 +115,5 @@ export default async function handler(request: Request): Promise<Response> {
     }
   }
 
-  return new Response(lastText, {
-    status: lastStatus,
-    headers: { 'Content-Type': 'application/json' },
-  })
+  sendJson(res, lastStatus, lastText)
 }
