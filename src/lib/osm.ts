@@ -22,8 +22,9 @@ const DEFAULT_TREE_H = 12
 const DEFAULT_FOREST_H = 18
 
 /** Hard cap so the loading spinner never hangs on OSM. */
-const OSM_BUDGET_MS = 22_000
-const PER_REQUEST_MS = 10_000
+const OSM_BUDGET_MS = 20_000
+const PER_REQUEST_MS = 8_000
+const PROXY_REQUEST_MS = 6_000
 
 const DIRECT_MIRRORS = [
   'https://lz4.overpass-api.de/api/interpreter',
@@ -132,7 +133,11 @@ async function fetchWithTimeout(
   }
 }
 
-async function postOne(endpoint: string, body: string): Promise<OverpassResponse> {
+async function postOne(
+  endpoint: string,
+  body: string,
+  timeoutMs = PER_REQUEST_MS,
+): Promise<OverpassResponse> {
   const res = await fetchWithTimeout(
     endpoint,
     {
@@ -140,14 +145,14 @@ async function postOne(endpoint: string, body: string): Promise<OverpassResponse
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body,
     },
-    PER_REQUEST_MS,
+    timeoutMs,
   )
 
   if (res.status === 429) {
     const retryAfter = Number(res.headers.get('Retry-After'))
     const waitMs = Number.isFinite(retryAfter) && retryAfter > 0
-      ? Math.min(retryAfter * 1000, 8_000)
-      : 3_500
+      ? Math.min(retryAfter * 1000, 5_000)
+      : 2_500
     const err = new Error(`OpenStreetMap rate limited (429)`) as Error & {
       status?: number
       waitMs?: number
@@ -165,42 +170,45 @@ async function postOne(endpoint: string, body: string): Promise<OverpassResponse
     throw err
   }
 
-  const data = (await res.json()) as OverpassResponse
-  return data
+  return (await res.json()) as OverpassResponse
 }
 
 /**
- * Sequential tries with 429 backoff. No parallel races (those caused rate limits).
+ * Prefer direct Overpass mirrors (Safari/iPhone usually fine).
+ * Same-origin /api/overpass is last — it was burning 20s+ on 504s and starving mirrors.
  */
 async function postOverpass(query: string): Promise<OverpassResponse> {
   return enqueueOverpass(async () => {
     const body = `data=${encodeURIComponent(query)}`
     const start = Math.floor(Math.random() * DIRECT_MIRRORS.length)
     const endpoints = [
-      '/api/overpass',
       ...DIRECT_MIRRORS.slice(start),
       ...DIRECT_MIRRORS.slice(0, start),
+      '/api/overpass',
     ]
 
     let lastError: Error | null = null
 
     for (const endpoint of endpoints) {
-      for (let attempt = 0; attempt < 2; attempt++) {
+      const isProxy = endpoint.startsWith('/')
+      const timeoutMs = isProxy ? PROXY_REQUEST_MS : PER_REQUEST_MS
+      const attempts = isProxy ? 1 : 2
+
+      for (let attempt = 0; attempt < attempts; attempt++) {
         try {
-          return await postOne(endpoint, body)
+          return await postOne(endpoint, body, timeoutMs)
         } catch (err) {
           lastError = err instanceof Error ? err : new Error(String(err))
           const status = (err as { status?: number }).status
           const waitMs = (err as { waitMs?: number }).waitMs
-          if (status === 429) {
-            await sleep(waitMs ?? 3_500)
-            continue // retry same endpoint once
+          if (status === 429 && !isProxy) {
+            await sleep(waitMs ?? 2_500)
+            continue
           }
-          break // try next endpoint
+          break
         }
       }
-      // Small gap before next mirror to stay under rate limits
-      await sleep(400)
+      await sleep(250)
     }
 
     throw lastError ?? new Error('OpenStreetMap request failed')

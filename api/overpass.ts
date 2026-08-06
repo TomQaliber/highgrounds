@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 
 export const config = {
   runtime: 'nodejs',
-  maxDuration: 60,
+  maxDuration: 15,
 }
 
 const USER_AGENT =
@@ -26,7 +26,6 @@ type VercelResponse = ServerResponse & {
   send: (body: string) => void
 }
 
-/** Rebuild x-www-form-urlencoded body from Vercel’s parsed or raw request body. */
 function getFormBody(req: VercelRequest): string {
   const body = req.body
   if (typeof body === 'string') return body
@@ -51,6 +50,10 @@ function sendJson(res: VercelResponse, status: number, payload: unknown) {
   res.end(typeof payload === 'string' ? payload : JSON.stringify(payload))
 }
 
+/**
+ * Keep this function short. The browser also calls Overpass directly;
+ * a long-failing proxy only burns the client timeout budget.
+ */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') {
     sendJson(res, 405, { error: 'Method not allowed' })
@@ -72,55 +75,48 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     ...OVERPASS_ENDPOINTS.slice(0, start),
   ]
 
-  for (const endpoint of endpoints.slice(0, 3)) {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const controller = new AbortController()
-      const timer = setTimeout(() => controller.abort(), 8_000)
-      try {
-        const upstream = await fetch(endpoint, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            Accept: 'application/json',
-            'User-Agent': USER_AGENT,
-          },
-          body,
-          signal: controller.signal,
-        })
-        const text = await upstream.text()
-        if (upstream.ok) {
-          res.statusCode = 200
-          res.setHeader(
-            'Content-Type',
-            upstream.headers.get('content-type') ?? 'application/json',
-          )
-          res.setHeader('Cache-Control', 'no-store')
-          res.setHeader('X-Overpass-Endpoint', endpoint)
-          res.end(text)
-          return
-        }
-        lastStatus = upstream.status
-        lastText = text || JSON.stringify({ error: `Overpass ${upstream.status}` })
-        if (upstream.status === 429) {
-          // Back off before retrying / trying the next mirror
-          await new Promise((r) => setTimeout(r, 2_500 + attempt * 1_500))
-          continue
-        }
-        if (![502, 503, 504].includes(upstream.status)) {
-          sendJson(res, upstream.status, lastText)
-          return
-        }
-        break
-      } catch (err) {
-        lastStatus = 504
-        lastText = JSON.stringify({
-          error: `Overpass unreachable: ${endpoint}`,
-          detail: err instanceof Error ? err.message : String(err),
-        })
-        break
-      } finally {
-        clearTimeout(timer)
+  // One quick attempt per mirror, max two mirrors (~10s worst case)
+  for (const endpoint of endpoints.slice(0, 2)) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 5_000)
+    try {
+      const upstream = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          Accept: 'application/json',
+          'User-Agent': USER_AGENT,
+        },
+        body,
+        signal: controller.signal,
+      })
+      const text = await upstream.text()
+      if (upstream.ok) {
+        res.statusCode = 200
+        res.setHeader(
+          'Content-Type',
+          upstream.headers.get('content-type') ?? 'application/json',
+        )
+        res.setHeader('Cache-Control', 'no-store')
+        res.setHeader('X-Overpass-Endpoint', endpoint)
+        res.end(text)
+        return
       }
+      lastStatus = upstream.status
+      lastText = text || JSON.stringify({ error: `Overpass ${upstream.status}` })
+      // Don't sleep on 429 here — return/try next quickly so the client can use direct mirrors
+      if (![429, 502, 503, 504].includes(upstream.status)) {
+        sendJson(res, upstream.status, lastText)
+        return
+      }
+    } catch (err) {
+      lastStatus = 504
+      lastText = JSON.stringify({
+        error: `Overpass unreachable: ${endpoint}`,
+        detail: err instanceof Error ? err.message : String(err),
+      })
+    } finally {
+      clearTimeout(timer)
     }
   }
 
