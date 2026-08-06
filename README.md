@@ -15,7 +15,15 @@ Europe-focused web app that finds elevated, accessible viewpoints near a locatio
 - Vite + React + TypeScript
 - MapLibre GL (OpenFreeMap basemap)
 - SunCalc
-- Proxied APIs: OpenTopoData (`eudem25m`), Nominatim, Overpass
+- Proxied APIs: OpenTopoData (`eudem25m`), Nominatim, Overpass (via `/api/*`)
+
+## Local vs Vercel
+
+Locally, Vite middleware serves `/api/*`. On Vercel, the same paths are Edge/serverless functions in `api/`.
+
+**Overpass / OSM context** goes through same-origin `/api/overpass` first (then direct mirrors as fallback). That keeps local and production behavior aligned and avoids adblockers that often block `overpass-*.de` on non-localhost sites.
+
+Vercel Hobby functions are short-lived (~10s), so OSM queries are kept light (paths + building *centers*). Full building footprints may still time out on busy mirrors — the UI warning is dismissible when that happens.
 
 ## Develop
 

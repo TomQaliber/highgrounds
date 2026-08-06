@@ -21,8 +21,12 @@ const METERS_PER_LEVEL = 3
 const DEFAULT_TREE_H = 12
 const DEFAULT_FOREST_H = 18
 
-/** Prefer direct Overpass (CORS *) — avoids Vercel Hobby’s ~10s serverless limit. */
+/**
+ * Prefer same-origin /api/overpass (works with adblockers; matches local Vite proxy).
+ * Fall back to direct Overpass mirrors if the proxy is down or times out.
+ */
 const OVERPASS_ENDPOINTS = [
+  '/api/overpass',
   'https://lz4.overpass-api.de/api/interpreter',
   'https://overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
@@ -68,10 +72,10 @@ function elementCenter(el: OverpassElement): { lat: number; lng: number } | null
   return null
 }
 
-/** Paths / parks — needed for walkable spots. */
+/** Paths / parks — keep light for Vercel Hobby (~10s). */
 function buildAccessQuery(bb: string): string {
   return `
-[out:json][timeout:20];
+[out:json][timeout:8];
 (
   way["highway"~"^(footway|path|steps|pedestrian|living_street|track|unclassified|residential|tertiary|secondary|service)$"](${bb});
   way["leisure"~"^(park|nature_reserve)$"](${bb});
@@ -81,23 +85,13 @@ out body geom;
 `.trim()
 }
 
-/** Full footprints for sun line-of-sight (heavier). */
-function buildObstacleGeomQuery(bb: string): string {
-  return `
-[out:json][timeout:20];
-(
-  way["building"](${bb});
-  way["natural"="wood"](${bb});
-  way["landuse"="forest"](${bb});
-);
-out body geom;
-`.trim()
-}
-
-/** Lightweight fallback: building/forest centers as approximate blockers. */
+/**
+ * Building/forest centers (fast). Full footprints often exceed Hobby timeouts
+ * in cities; centers still feed sun-blocking as approximate discs.
+ */
 function buildObstacleCenterQuery(bb: string): string {
   return `
-[out:json][timeout:15];
+[out:json][timeout:8];
 (
   way["building"](${bb});
   way["natural"="wood"](${bb});
@@ -109,21 +103,15 @@ out center tags;
 
 async function postOverpass(query: string): Promise<OverpassResponse> {
   let lastError: Error | null = null
-  // Rotate start endpoint so repeated searches don't always hit the same busy mirror
-  const start = Math.floor(Math.random() * OVERPASS_ENDPOINTS.length)
-  const endpoints = [
-    ...OVERPASS_ENDPOINTS.slice(start),
-    ...OVERPASS_ENDPOINTS.slice(0, start),
-  ]
 
-  for (const endpoint of endpoints) {
+  for (const endpoint of OVERPASS_ENDPOINTS) {
+    const isProxy = endpoint.startsWith('/')
     try {
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: `data=${encodeURIComponent(query)}`,
-        // Fail over quickly when a mirror is queued/slow
-        signal: AbortSignal.timeout(14_000),
+        signal: AbortSignal.timeout(isProxy ? 12_000 : 16_000),
       })
       if (!res.ok) {
         lastError = new Error(`OpenStreetMap request failed (${res.status})`)
@@ -254,16 +242,6 @@ function parseElements(elements: OverpassElement[]): {
   return { obstacles, accessFeatures }
 }
 
-async function fetchObstacles(bb: string): Promise<Obstacle[]> {
-  try {
-    const data = await postOverpass(buildObstacleGeomQuery(bb))
-    return parseElements(data.elements ?? []).obstacles
-  } catch {
-    const data = await postOverpass(buildObstacleCenterQuery(bb))
-    return parseElements(data.elements ?? []).obstacles
-  }
-}
-
 export async function fetchOsmContext(bbox: {
   south: number
   west: number
@@ -278,7 +256,6 @@ export async function fetchOsmContext(bbox: {
   for (let attempt = 0; attempt < 2; attempt++) {
     if (attempt > 0) await sleep(900 * attempt)
 
-    // Sequential: paths first (usually lighter), then buildings
     let accessFeatures: AccessFeature[] = []
     let obstacles: Obstacle[] = []
     let accessOk = false
@@ -293,7 +270,8 @@ export async function fetchOsmContext(bbox: {
     }
 
     try {
-      obstacles = await fetchObstacles(bb)
+      const obstacleData = await postOverpass(buildObstacleCenterQuery(bb))
+      obstacles = parseElements(obstacleData.elements ?? []).obstacles
       obstaclesOk = true
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err))
