@@ -73,45 +73,54 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   ]
 
   for (const endpoint of endpoints.slice(0, 3)) {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 8_000)
-    try {
-      const upstream = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          Accept: 'application/json',
-          'User-Agent': USER_AGENT,
-        },
-        body,
-        signal: controller.signal,
-      })
-      const text = await upstream.text()
-      if (upstream.ok) {
-        res.statusCode = 200
-        res.setHeader(
-          'Content-Type',
-          upstream.headers.get('content-type') ?? 'application/json',
-        )
-        res.setHeader('Cache-Control', 'no-store')
-        res.setHeader('X-Overpass-Endpoint', endpoint)
-        res.end(text)
-        return
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), 8_000)
+      try {
+        const upstream = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            Accept: 'application/json',
+            'User-Agent': USER_AGENT,
+          },
+          body,
+          signal: controller.signal,
+        })
+        const text = await upstream.text()
+        if (upstream.ok) {
+          res.statusCode = 200
+          res.setHeader(
+            'Content-Type',
+            upstream.headers.get('content-type') ?? 'application/json',
+          )
+          res.setHeader('Cache-Control', 'no-store')
+          res.setHeader('X-Overpass-Endpoint', endpoint)
+          res.end(text)
+          return
+        }
+        lastStatus = upstream.status
+        lastText = text || JSON.stringify({ error: `Overpass ${upstream.status}` })
+        if (upstream.status === 429) {
+          // Back off before retrying / trying the next mirror
+          await new Promise((r) => setTimeout(r, 2_500 + attempt * 1_500))
+          continue
+        }
+        if (![502, 503, 504].includes(upstream.status)) {
+          sendJson(res, upstream.status, lastText)
+          return
+        }
+        break
+      } catch (err) {
+        lastStatus = 504
+        lastText = JSON.stringify({
+          error: `Overpass unreachable: ${endpoint}`,
+          detail: err instanceof Error ? err.message : String(err),
+        })
+        break
+      } finally {
+        clearTimeout(timer)
       }
-      lastStatus = upstream.status
-      lastText = text || JSON.stringify({ error: `Overpass ${upstream.status}` })
-      if (![429, 502, 503, 504].includes(upstream.status)) {
-        sendJson(res, upstream.status, lastText)
-        return
-      }
-    } catch (err) {
-      lastStatus = 504
-      lastText = JSON.stringify({
-        error: `Overpass unreachable: ${endpoint}`,
-        detail: err instanceof Error ? err.message : String(err),
-      })
-    } finally {
-      clearTimeout(timer)
     }
   }
 

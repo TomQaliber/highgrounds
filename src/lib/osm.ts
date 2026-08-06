@@ -22,14 +22,27 @@ const DEFAULT_TREE_H = 12
 const DEFAULT_FOREST_H = 18
 
 /** Hard cap so the loading spinner never hangs on OSM. */
-const OSM_BUDGET_MS = 18_000
-const PER_REQUEST_MS = 7_000
+const OSM_BUDGET_MS = 22_000
+const PER_REQUEST_MS = 10_000
 
 const DIRECT_MIRRORS = [
   'https://lz4.overpass-api.de/api/interpreter',
   'https://overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter',
 ]
+
+/** Serialize all Overpass traffic — parallel races were triggering 429s. */
+let overpassQueue: Promise<unknown> = Promise.resolve()
+
+function enqueueOverpass<T>(fn: () => Promise<T>): Promise<T> {
+  const run = overpassQueue.then(fn, fn)
+  overpassQueue = run.then(
+    () => undefined,
+    () => undefined,
+  )
+  return run
+}
 
 function parseHeight(tags: Record<string, string> | undefined, fallback: number): {
   height: number
@@ -70,22 +83,19 @@ function elementCenter(el: OverpassElement): { lat: number; lng: number } | null
   return null
 }
 
-/** Paths / parks — include field tracks, bridleways, and cycleways. */
-function buildAccessQuery(bb: string): string {
+/**
+ * One query for paths (full geom) + buildings/woods (centers).
+ * Halves request count vs two separate posts (helps avoid 429).
+ */
+function buildCombinedQuery(bb: string): string {
   return `
-[out:json][timeout:6];
+[out:json][timeout:10];
 (
   way["highway"~"^(footway|path|steps|pedestrian|bridleway|cycleway|living_street|track|unclassified|residential|tertiary|secondary|service)$"](${bb});
   way["leisure"~"^(park|nature_reserve)$"](${bb});
   way["landuse"~"^(grass|recreation_ground|village_green)$"](${bb});
 );
 out body geom;
-`.trim()
-}
-
-function buildObstacleCenterQuery(bb: string): string {
-  return `
-[out:json][timeout:6];
 (
   way["building"](${bb});
   way["natural"="wood"](${bb});
@@ -95,7 +105,19 @@ out center tags;
 `.trim()
 }
 
-/** AbortController + timer — more reliable on iOS than AbortSignal.timeout(). */
+/** Lighter fallback if the combined query is rate-limited or times out. */
+function buildAccessOnlyQuery(bb: string): string {
+  return `
+[out:json][timeout:8];
+(
+  way["highway"~"^(footway|path|steps|pedestrian|bridleway|cycleway|living_street|track|unclassified|residential|tertiary|secondary|service)$"](${bb});
+  way["leisure"~"^(park|nature_reserve)$"](${bb});
+  way["landuse"~"^(grass|recreation_ground|village_green)$"](${bb});
+);
+out body geom;
+`.trim()
+}
+
 async function fetchWithTimeout(
   url: string,
   init: RequestInit,
@@ -110,7 +132,7 @@ async function fetchWithTimeout(
   }
 }
 
-async function postOne(endpoint: string, body: string, ms: number): Promise<OverpassResponse> {
+async function postOne(endpoint: string, body: string): Promise<OverpassResponse> {
   const res = await fetchWithTimeout(
     endpoint,
     {
@@ -118,41 +140,71 @@ async function postOne(endpoint: string, body: string, ms: number): Promise<Over
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body,
     },
-    ms,
+    PER_REQUEST_MS,
   )
-  if (!res.ok) {
-    throw new Error(`OpenStreetMap request failed (${res.status})`)
+
+  if (res.status === 429) {
+    const retryAfter = Number(res.headers.get('Retry-After'))
+    const waitMs = Number.isFinite(retryAfter) && retryAfter > 0
+      ? Math.min(retryAfter * 1000, 8_000)
+      : 3_500
+    const err = new Error(`OpenStreetMap rate limited (429)`) as Error & {
+      status?: number
+      waitMs?: number
+    }
+    err.status = 429
+    err.waitMs = waitMs
+    throw err
   }
-  return (await res.json()) as OverpassResponse
+
+  if (!res.ok) {
+    const err = new Error(`OpenStreetMap request failed (${res.status})`) as Error & {
+      status?: number
+    }
+    err.status = res.status
+    throw err
+  }
+
+  const data = (await res.json()) as OverpassResponse
+  return data
 }
 
 /**
- * Race same-origin proxy + one direct mirror. First success wins.
- * Prevents endless spinning when a mirror hangs without aborting.
+ * Sequential tries with 429 backoff. No parallel races (those caused rate limits).
  */
 async function postOverpass(query: string): Promise<OverpassResponse> {
-  const body = `data=${encodeURIComponent(query)}`
-  const mirror = DIRECT_MIRRORS[Math.floor(Math.random() * DIRECT_MIRRORS.length)]!
+  return enqueueOverpass(async () => {
+    const body = `data=${encodeURIComponent(query)}`
+    const start = Math.floor(Math.random() * DIRECT_MIRRORS.length)
+    const endpoints = [
+      '/api/overpass',
+      ...DIRECT_MIRRORS.slice(start),
+      ...DIRECT_MIRRORS.slice(0, start),
+    ]
 
-  const attempts = [
-    postOne('/api/overpass', body, PER_REQUEST_MS),
-    postOne(mirror, body, PER_REQUEST_MS),
-  ]
+    let lastError: Error | null = null
 
-  try {
-    return await Promise.any(attempts)
-  } catch {
-    // Promise.any AggregateError — try one more mirror sequentially
-    for (const endpoint of DIRECT_MIRRORS) {
-      if (endpoint === mirror) continue
-      try {
-        return await postOne(endpoint, body, PER_REQUEST_MS)
-      } catch {
-        /* try next */
+    for (const endpoint of endpoints) {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          return await postOne(endpoint, body)
+        } catch (err) {
+          lastError = err instanceof Error ? err : new Error(String(err))
+          const status = (err as { status?: number }).status
+          const waitMs = (err as { waitMs?: number }).waitMs
+          if (status === 429) {
+            await sleep(waitMs ?? 3_500)
+            continue // retry same endpoint once
+          }
+          break // try next endpoint
+        }
       }
+      // Small gap before next mirror to stay under rate limits
+      await sleep(400)
     }
-    throw new Error('OpenStreetMap request failed')
-  }
+
+    throw lastError ?? new Error('OpenStreetMap request failed')
+  })
 }
 
 function parseElements(elements: OverpassElement[]): {
@@ -293,41 +345,23 @@ export async function fetchOsmContext(bbox: {
   const bb = `${south},${west},${north},${east}`
 
   const run = async () => {
-    let accessFeatures: AccessFeature[] = []
-    let obstacles: Obstacle[] = []
-    let accessOk = false
-    let obstaclesOk = false
-    let lastError: Error | null = null
-
     try {
-      const accessData = await postOverpass(buildAccessQuery(bb))
-      accessFeatures = parseElements(accessData.elements ?? []).accessFeatures
-      accessOk = true
-    } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err))
+      const data = await postOverpass(buildCombinedQuery(bb))
+      const parsed = parseElements(data.elements ?? [])
+      if (parsed.accessFeatures.length > 0 || parsed.obstacles.length > 0) {
+        return parsed
+      }
+    } catch {
+      /* fall through to lighter query */
     }
 
-    try {
-      const obstacleData = await postOverpass(buildObstacleCenterQuery(bb))
-      obstacles = parseElements(obstacleData.elements ?? []).obstacles
-      obstaclesOk = true
-    } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err))
+    await sleep(1_200)
+    const accessData = await postOverpass(buildAccessOnlyQuery(bb))
+    const parsed = parseElements(accessData.elements ?? [])
+    if (parsed.accessFeatures.length === 0 && parsed.obstacles.length === 0) {
+      throw new Error('OpenStreetMap returned no map features')
     }
-
-    if (accessOk || obstaclesOk) {
-      return { obstacles, accessFeatures }
-    }
-
-    // One short retry of access only
-    await sleep(400)
-    try {
-      const accessData = await postOverpass(buildAccessQuery(bb))
-      accessFeatures = parseElements(accessData.elements ?? []).accessFeatures
-      return { obstacles: [], accessFeatures }
-    } catch (err) {
-      throw lastError ?? (err instanceof Error ? err : new Error(String(err)))
-    }
+    return { obstacles: [], accessFeatures: parsed.accessFeatures }
   }
 
   return withBudget(run(), OSM_BUDGET_MS, 'OpenStreetMap')
