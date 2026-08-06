@@ -192,6 +192,10 @@
   background: color-mix(in srgb, var(--ink) 8%, transparent);
 }
 
+.app__warning + .app__warning {
+  top: max(10.5rem, calc(env(safe-area-inset-top) + 9.5rem));
+}
+
 .spinner {
   width: 1.4rem;
   height: 1.4rem;

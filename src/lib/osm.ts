@@ -70,11 +70,12 @@ function elementCenter(el: OverpassElement): { lat: number; lng: number } | null
   return null
 }
 
+/** Paths / parks — include field tracks, bridleways, and cycleways. */
 function buildAccessQuery(bb: string): string {
   return `
 [out:json][timeout:6];
 (
-  way["highway"~"^(footway|path|steps|pedestrian|living_street|track|unclassified|residential|tertiary|secondary|service)$"](${bb});
+  way["highway"~"^(footway|path|steps|pedestrian|bridleway|cycleway|living_street|track|unclassified|residential|tertiary|secondary|service)$"](${bb});
   way["leisure"~"^(park|nature_reserve)$"](${bb});
   way["landuse"~"^(grass|recreation_ground|village_green)$"](${bb});
 );
@@ -236,7 +237,7 @@ function parseElements(elements: OverpassElement[]): {
 
     if (
       highway &&
-      /^(footway|path|steps|pedestrian|living_street|track|unclassified|residential|tertiary|secondary|service)$/.test(
+      /^(footway|path|steps|pedestrian|bridleway|cycleway|living_street|track|unclassified|residential|tertiary|secondary|service)$/.test(
         highway,
       )
     ) {

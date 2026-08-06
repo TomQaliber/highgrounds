@@ -7,6 +7,7 @@ import { TimeSlider } from './components/TimeSlider'
 import { classifyAndSnapViewpoints } from './lib/access'
 import {
   attachAspects,
+  aspectAlignment,
   candidatesFromPaths,
   findTerrainCandidates,
   mergeCandidates,
@@ -43,30 +44,69 @@ export default function App() {
   const [status, setStatus] = useState<Status>({ kind: 'idle' })
   const [currentTime, setCurrentTime] = useState<Date | null>(null)
   const [warning, setWarning] = useState<string | null>(null)
+  const [filterNoticeDismissed, setFilterNoticeDismissed] = useState(false)
   const [filter, setFilter] = useState<SpotFilter>('all')
   const [accessFilter, setAccessFilter] = useState<AccessFilter>('all')
   const [elevationSamples, setElevationSamples] = useState<ElevationPoint[]>([])
   const [showHeightOverlay, setShowHeightOverlay] = useState(false)
   const [searchRadiusM, setSearchRadiusM] = useState(DEFAULT_RADIUS_M)
 
-  const visibleViewpoints = useMemo(() => {
+  const sunFilterMeta = useMemo(() => {
     let list = viewpoints
     if (accessFilter === 'walkable') {
       list = list.filter((v) => v.access === 'public' || v.kind === 'path')
     }
-    if (filter === 'sunrise') {
-      list = list.filter((v) => isGoodSunSpot(v.sunriseLos))
-      list = [...list].sort(
-        (a, b) => losRank(a.sunriseLos) - losRank(b.sunriseLos) || b.prominence - a.prominence,
-      )
-    } else if (filter === 'sunset') {
-      list = list.filter((v) => isGoodSunSpot(v.sunsetLos))
-      list = [...list].sort(
-        (a, b) => losRank(a.sunsetLos) - losRank(b.sunsetLos) || b.prominence - a.prominence,
-      )
+
+    if (filter !== 'sunrise' && filter !== 'sunset') {
+      return { list, mode: 'all' as const }
     }
-    return list
+
+    const bearing = filter === 'sunrise' ? 90 : 270
+    const losOf = (v: Viewpoint) => (filter === 'sunrise' ? v.sunriseLos : v.sunsetLos)
+    const good = list.filter((v) => isGoodSunSpot(losOf(v)))
+    if (good.length > 0) {
+      return {
+        list: [...good].sort(
+          (a, b) => losRank(losOf(a)) - losRank(losOf(b)) || b.prominence - a.prominence,
+        ),
+        mode: 'clear' as const,
+      }
+    }
+
+    // No clear/partial sun spots — still offer walkable / elevated alternatives
+    const alts = [...list]
+      .filter((v) => v.kind === 'path' || v.access === 'public')
+      .sort((a, b) => {
+        const score = (v: Viewpoint) =>
+          aspectAlignment(v.aspectDeg ?? bearing, bearing) * 6 +
+          (v.kind === 'path' ? 4 : 0) +
+          v.prominence * 0.2 +
+          v.elevation * 0.02
+        return score(b) - score(a)
+      })
+      .slice(0, 10)
+
+    if (alts.length > 0) {
+      return { list: alts, mode: 'alternatives' as const }
+    }
+    if (list.length > 0) {
+      return { list: list.slice(0, 8), mode: 'alternatives' as const }
+    }
+    return { list: [], mode: 'empty' as const }
   }, [viewpoints, filter, accessFilter])
+
+  const visibleViewpoints = sunFilterMeta.list
+
+  const filterNotice =
+    status.kind === 'ready' &&
+    (filter === 'sunrise' || filter === 'sunset') &&
+    !filterNoticeDismissed
+      ? sunFilterMeta.mode === 'alternatives'
+        ? `No clear ${filter} views found — showing walkable high spots nearby that may still work.`
+        : sunFilterMeta.mode === 'empty'
+          ? `No clear ${filter} spots found here — try “All highs” or another area.`
+          : null
+      : null
 
   const selected = visibleViewpoints.find((v) => v.id === selectedId) ?? null
 
@@ -106,6 +146,7 @@ export default function App() {
     setElevationSamples([])
     setShowHeightOverlay(false)
     setWarning(null)
+    setFilterNoticeDismissed(false)
     setFilter('all')
     setAccessFilter('all')
     setStatus({ kind: 'loading', message: 'Sampling elevation…', progress: 0 })
@@ -204,6 +245,7 @@ export default function App() {
 
   function handleFilterChange(next: SpotFilter) {
     setFilter(next)
+    setFilterNoticeDismissed(false)
     if (!origin || !sun) return
 
     const times = sunStateAt(currentTime ?? new Date(), origin)
@@ -364,11 +406,17 @@ export default function App() {
         </div>
       )}
 
-      {status.kind === 'ready' && filter !== 'all' && visibleViewpoints.length === 0 && (
+      {filterNotice && (
         <div className="app__warning" role="status">
-          <p className="app__warning-text">
-            No clear {filter} spots found here — try “All highs” or another area.
-          </p>
+          <p className="app__warning-text">{filterNotice}</p>
+          <button
+            type="button"
+            className="app__warning-close"
+            onClick={() => setFilterNoticeDismissed(true)}
+            aria-label="Dismiss message"
+          >
+            ×
+          </button>
         </div>
       )}
 

@@ -1,10 +1,10 @@
 import type { AccessFeature, ElevationPoint, Viewpoint } from './types'
 import { distanceM, metersPerDegree } from './geo'
 
-const MAX_CANDIDATES = 16
-const PATH_SAMPLE_M = 80
-const DEDUPE_M = 85
-const RESERVED_PATH_SLOTS = 6
+const MAX_CANDIDATES = 18
+const PATH_SAMPLE_M = 60
+const DEDUPE_M = 75
+const RESERVED_PATH_SLOTS = 8
 
 export interface TerrainCell extends ElevationPoint {
   aspectDeg: number | null
@@ -223,8 +223,8 @@ export function candidatesFromPaths(
         const elev = nearestElevation(samples, lat, lng)
         nextSampleAt += PATH_SAMPLE_M
         if (elev == null) continue
-        // Mid-slope roads can sit slightly below the local DEM mean
-        if (elev < mean - 6) continue
+        // Keep field tracks / mid-slope lanes; only drop clearly low spots
+        if (elev < mean - 12) continue
         out.push({
           id: `path-${path.id}-${idx++}`,
           lat,
@@ -275,7 +275,13 @@ export function mergeCandidates(...groups: Viewpoint[][]): Viewpoint[] {
   const terrain = flat.filter((v) => v.kind !== 'path')
 
   const rankedPaths = dedupeViewpoints(
-    [...paths].sort((a, b) => b.elevation - a.elevation || b.prominence - a.prominence),
+    [...paths].sort(
+      (a, b) =>
+        (b.placeName ? 8 : 0) +
+        b.elevation -
+        ((a.placeName ? 8 : 0) + a.elevation) ||
+        b.prominence - a.prominence,
+    ),
     DEDUPE_M,
   )
   const rankedTerrain = dedupeViewpoints(
